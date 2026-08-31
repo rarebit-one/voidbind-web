@@ -1,0 +1,48 @@
+{
+  "name": "@rarebit-one/voidbind-web",
+  "version": "0.1.0",
+  "description": "Browser Voidbind web-login client — the JS half of the Voidbind three-repo topology (server=voidbind-go, native=voidbind-kmp, web=voidbind-web). Speaks the ADR-0006 weblogin.Broker QR-login contract; RP-agnostic, framework-free, consumed by Tizen .wgt and web clients.",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "author": "Rarebit One",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rarebit-one/voidbind-web.git"
+  },
+  "homepage": "https://github.com/rarebit-one/voidbind-web#readme",
+  "bugs": {
+    "url": "https://github.com/rarebit-one/voidbind-web/issues"
+  },
+  "keywords": [
+    "voidbind",
+    "authentication",
+    "qr-login",
+    "weblogin",
+    "passwordless",
+    "tizen",
+    "esm"
+  ],
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md",
+    "DESIGN.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  }
+}

@@ -1,0 +1,47 @@
+name: publish
+
+# Publishes the `@rarebit-one/voidbind-web` npm package to the GitHub Packages
+# npm registry (https://npm.pkg.github.com) for consumption by the Tizen `.wgt`
+# surfaces (allthing-tizen, heyarr-tizen) and browser web clients. Symmetric peer
+# of voidbind-kmp's publish.yml, but npm instead of Maven/Gradle.
+#
+# Triggers on a published GitHub Release or a pushed `v*` tag; `workflow_dispatch`
+# lets a maintainer publish on demand with no code change. The package stays
+# PR-verified by test.yml, so this workflow only does the release-time publish.
+#
+# NOTE (2026-08): GitHub Packages on this org currently returns HTTP 402
+# (billing) — the same block voidbind-kmp hits — so a run will fail at the
+# publish step until billing is resolved. The workflow is kept ready so a later
+# `workflow_dispatch` publishes with no code change.
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # registry-url + scope wire npm to GitHub Packages and inject the
+      # authenticated .npmrc; NODE_AUTH_TOKEN below carries the credential.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@rarebit-one"
+      - name: install
+        run: npm install --no-audit --no-fund
+      - name: test
+        run: npm test
+      - name: publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

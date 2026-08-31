@@ -1,0 +1,34 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref (an in-flight PR push shouldn't keep
+# an older commit's CI burning). Mirrors the org convention.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The whole package is plain ESM Node — no build step. This job proves the
+  # unit suite (the start -> poll -> token flow + the QR/Bearer/SSE helpers,
+  # mocking fetch) stays green, which is the merge gate. Node LTS on ubuntu.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # No lockfile / dependencies today (the package is dependency-free and the
+      # QR encoder is vendored), so `npm ci` would fail for want of a lockfile.
+      # `npm install` is a no-op install that also succeeds once deps appear.
+      - name: install
+        run: npm install --no-audit --no-fund
+      - name: test
+        run: npm test
