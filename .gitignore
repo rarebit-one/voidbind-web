@@ -3,3 +3,6 @@ dist/
 *.tgz
 npm-debug.log*
 .DS_Store
+
+# Claude Code worktree workflow
+.worktrees/
