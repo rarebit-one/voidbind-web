@@ -14,11 +14,14 @@
 // generalised for the two Tizen `.wgt` surfaces (allthing-tizen, heyarr-tizen)
 // and browser web clients.
 //
-// Wire contract (mirrored from voidbind-go `weblogin`, via allthing signin.html):
-//   POST {baseUrl}/login        -> { id, qr [, expiresAt] }
-//   GET  {baseUrl}/login/{id}   -> { status: 'pending'|'approved'|'expired'|'denied',
-//                                    token?, user? }
+// Wire contract (voidbind-go `weblogin/handler.go` — the source of truth):
+//   POST {baseUrl}/login                   -> { id, qr }
+//   POST {baseUrl}/login?mode=number-match -> { id, qr, match_number }   (voidbind-go ADR-0006 v2)
+//   GET  {baseUrl}/login/{id}              -> { status: 'pending'|'approved'|'expired',
+//                                               token?, user? }   (404 once unknown)
 // On `approved` the response carries `token` (the session token) and `user`.
+// The broker sends no expiry timestamp on create; `status: 'expired'` on the
+// poll is the only expiry signal.
 
 'use strict';
 
@@ -133,21 +136,31 @@ export function sseUrl(baseUrl, path, token) {
 
 // --- login flow -------------------------------------------------------------
 
-// Start a web login: POST {baseUrl}/login. Resolves with the login id, the QR
-// payload (the `voidbind:login?rp=&id=` tuple to render/scan), and `expiresAt`
-// when the broker supplies it (optional; the broker remains the authority on
-// expiry via the poll's `status`). `fetchImpl` is injectable for tests.
-export async function startWebLogin({ baseUrl, signal, fetchImpl } = {}) {
+// Start a web login: POST {baseUrl}/login. Resolves with the login id and the
+// QR payload (the `voidbind:login?rp=&id=` tuple to render/scan).
+//
+// `numberMatch: true` requests a voidbind-go ADR-0006 v2 number-matching login
+// (`POST /login?mode=number-match`). The broker then also returns the true match
+// number, surfaced as `matchNumber` (an integer in [0, 100)): the caller MUST
+// display it on this screen, because the phone shows only a candidate set and
+// the user approves by tapping the number they see here. The QR is identical
+// either way. A broker that ignores the mode sends no `match_number`, so
+// `matchNumber` is then `undefined` and the login proceeds as a plain v1 QR login.
+// `fetchImpl` is injectable for tests.
+export async function startWebLogin({ baseUrl, numberMatch = false, signal, fetchImpl } = {}) {
   const doFetch = fetchImpl || globalThis.fetch;
-  const res = await doFetch(joinUrl(baseUrl, '/login'), { method: 'POST', signal });
+  const path = numberMatch ? '/login?mode=number-match' : '/login';
+  const res = await doFetch(joinUrl(baseUrl, path), { method: 'POST', signal });
   if (!res.ok) throw new Error('voidbind login start failed: HTTP ' + res.status);
   const body = await res.json();
-  return { loginId: body.id, qrPayload: body.qr, expiresAt: body.expiresAt };
+  const out = { loginId: body.id, qrPayload: body.qr };
+  if (typeof body.match_number === 'number') out.matchNumber = body.match_number;
+  return out;
 }
 
 // Poll {baseUrl}/login/{loginId} until the device approves. Resolves with
-// { token, user } on approval; rejects on expiry, denial, a broker that no longer
-// knows the login (non-OK response), or abort via `signal`. Polls every
+// { token, user } on approval; rejects on expiry, a broker that no longer knows
+// the login (non-OK response, e.g. 404), or abort via `signal`. Polls every
 // `intervalMs` (default POLL_INTERVAL_MS); the broker's `status` is the
 // authority, so this respects the ADR-0006 ChallengeTTL without a local clock.
 export async function pollUntilApproved({ baseUrl, loginId, signal, intervalMs = POLL_INTERVAL_MS, fetchImpl } = {}) {
@@ -159,6 +172,9 @@ export async function pollUntilApproved({ baseUrl, loginId, signal, intervalMs =
     const body = await res.json();
     if (body.status === 'approved') return { token: body.token, user: body.user };
     if (body.status === 'expired') throw new Error('voidbind login expired');
+    // voidbind-go never sends 'denied' (a refused approval leaves the login
+    // pending until it expires), but failing fast on it is harmless should an RP
+    // add one.
     if (body.status === 'denied') throw new Error('voidbind login denied');
     // Anything else (e.g. 'pending') — keep waiting.
     await delay(intervalMs, signal);
@@ -171,12 +187,18 @@ export async function pollUntilApproved({ baseUrl, loginId, signal, intervalMs =
 // without this module owning any DOM. This is the one call a Tizen `.wgt` or a
 // web client typically needs; the individual functions above are exposed for
 // finer control.
-export async function signIn({ baseUrl, qrElement, signal, onStatus, intervalMs, fetchImpl } = {}) {
+//
+// `numberMatch: true` opts into voidbind-go ADR-0006 number-matching (see startWebLogin): the
+// 'awaiting-approval' update then carries `matchNumber`, which the UI must show
+// next to the QR.
+export async function signIn({ baseUrl, qrElement, numberMatch = false, signal, onStatus, intervalMs, fetchImpl } = {}) {
   const notify = typeof onStatus === 'function' ? onStatus : () => {};
   notify({ phase: 'starting' });
-  const { loginId, qrPayload, expiresAt } = await startWebLogin({ baseUrl, signal, fetchImpl });
+  const { loginId, qrPayload, matchNumber } = await startWebLogin({ baseUrl, numberMatch, signal, fetchImpl });
   if (qrElement) renderQr(qrElement, qrPayload);
-  notify({ phase: 'awaiting-approval', loginId, qrPayload, expiresAt });
+  const awaiting = { phase: 'awaiting-approval', loginId, qrPayload };
+  if (matchNumber !== undefined) awaiting.matchNumber = matchNumber;
+  notify(awaiting);
   const { token, user } = await pollUntilApproved({ baseUrl, loginId, signal, intervalMs, fetchImpl });
   notify({ phase: 'approved', user });
   return { token, user };

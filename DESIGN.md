@@ -33,11 +33,14 @@ for the same reasons `voidbind-kmp` (the native authenticator) is separate from
 
 The module mirrors — does not invent — the `weblogin.Broker` HTTP contract from
 [allthing `docs/adr/0006-voidbind-web-login.md`](https://github.com/rarebit-one/allthing/blob/main/docs/adr/0006-voidbind-web-login.md),
-as exercised by allthing's `web/signin.html`:
+as exercised by allthing's `web/signin.html`. The wire shapes themselves are
+voidbind-go's `weblogin/handler.go` (`createResp`, `pollResp`), the source of truth:
 
 ```
-POST {baseUrl}/login        -> { id, qr [, expiresAt] }
-GET  {baseUrl}/login/{id}   -> { status: 'pending'|'approved'|'expired'|'denied', token?, user? }
+POST {baseUrl}/login                   -> { id, qr }
+POST {baseUrl}/login?mode=number-match -> { id, qr, match_number }
+GET  {baseUrl}/login/{id}              -> { status: 'pending'|'approved'|'expired', token?, user? }
+                                          (404 once the broker no longer knows the login)
 ```
 
 - `qr` is the `voidbind:login?rp=<origin>&id=<login-id>` payload the broker mints
@@ -52,19 +55,25 @@ GET  {baseUrl}/login/{id}   -> { status: 'pending'|'approved'|'expired'|'denied'
   reached for.
 - The **broker is the authority on expiry**. It returns `status: 'expired'` once
   its ChallengeTTL (ADR-0006) lapses, so the client polls until a terminal
-  status rather than running a local timeout clock. `expiresAt` is surfaced when
-  the broker sends it, for UI countdowns only.
+  status rather than running a local timeout clock. The create response carries
+  no expiry timestamp, so there is nothing to count down against.
+- **Number-matching (voidbind-go ADR-0006 v2) is opt-in** (`numberMatch: true`).
+  The create response's `match_number` is the true number. This module surfaces
+  it as `matchNumber` for the caller to display, because this browser is the one
+  screen the legitimate user is looking at. The phone receives only the
+  candidates. Without the option the request carries no `mode`, so existing
+  consumers get an unchanged v1 login.
 
 ### Where the wire forced a detail
 
-- allthing's `signin.html` uses the wire field names `id` and `qr` and reads no
-  `expiresAt`. This module keeps the wire names on the boundary but exposes them
-  to callers as `loginId` / `qrPayload`, and surfaces `expiresAt` **only if the
-  broker includes it** (optional, may be `undefined`).
-- `signin.html` handles `approved` and `expired`; ADR-0006 also implies denial.
-  This module additionally treats `status: 'denied'` as a reject, so a declined
-  approval fails fast rather than polling forever. A broker that never sends
-  `denied` is unaffected.
+- allthing's `signin.html` uses the wire field names `id` and `qr`. This module
+  keeps the wire names on the boundary but exposes them to callers as
+  `loginId` / `qrPayload` (and `match_number` as `matchNumber`).
+- voidbind-go has no `denied` status: a failed approval (wrong number, unknown
+  device) leaves the login `pending` so the honest device can still approve, and
+  only `expired` ends it. This module still treats a `status: 'denied'` as a
+  reject so a non-voidbind-go RP that adds one fails fast. Against voidbind-go
+  that branch never fires.
 
 ## Scope
 

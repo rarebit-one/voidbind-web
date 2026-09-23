@@ -45,18 +45,44 @@ test('joinUrl trims trailing slash and ensures a leading slash', () => {
   assert.equal(joinUrl('https://rp.example///', '/login/abc'), 'https://rp.example/login/abc');
 });
 
-test('startWebLogin POSTs /login and maps id/qr/expiresAt', async () => {
+test('startWebLogin POSTs /login and maps the voidbind-go createResp {id, qr}', async () => {
   const fetchImpl = mockFetch({
     'POST /login': {
-      body: { id: 'login-123', qr: 'voidbind:login?rp=https%3A%2F%2Frp.example&id=login-123', expiresAt: 1730000000 },
+      body: { id: 'login-123', qr: 'voidbind:login?rp=https%3A%2F%2Frp.example&id=login-123' },
     },
   });
   const out = await startWebLogin({ baseUrl: BASE, fetchImpl });
-  assert.equal(out.loginId, 'login-123');
-  assert.match(out.qrPayload, /^voidbind:login\?rp=.*&id=login-123$/);
-  assert.equal(out.expiresAt, 1730000000);
+  assert.deepEqual(out, {
+    loginId: 'login-123',
+    qrPayload: 'voidbind:login?rp=https%3A%2F%2Frp.example&id=login-123',
+  });
   assert.equal(fetchImpl.calls[0].init.method, 'POST');
   assert.equal(fetchImpl.calls[0].key, 'POST /login');
+  assert.equal(new URL(fetchImpl.calls[0].url).search, '', 'a v1 login sends no mode');
+});
+
+test('startWebLogin numberMatch requests mode=number-match and surfaces match_number', async () => {
+  const fetchImpl = mockFetch({
+    'POST /login': { body: { id: 'L2', qr: 'voidbind:login?rp=x&id=L2', match_number: 7 } },
+  });
+  const out = await startWebLogin({ baseUrl: BASE, numberMatch: true, fetchImpl });
+  assert.equal(new URL(fetchImpl.calls[0].url).searchParams.get('mode'), 'number-match');
+  assert.deepEqual(out, { loginId: 'L2', qrPayload: 'voidbind:login?rp=x&id=L2', matchNumber: 7 });
+});
+
+test('startWebLogin keeps match number 0 (a valid two-digit draw)', async () => {
+  const fetchImpl = mockFetch({
+    'POST /login': { body: { id: 'L0', qr: 'voidbind:login?rp=x&id=L0', match_number: 0 } },
+  });
+  const out = await startWebLogin({ baseUrl: BASE, numberMatch: true, fetchImpl });
+  assert.equal(out.matchNumber, 0);
+});
+
+test('startWebLogin numberMatch against a broker without v2 leaves matchNumber undefined', async () => {
+  const fetchImpl = mockFetch({ 'POST /login': { body: { id: 'L3', qr: 'voidbind:login?rp=x&id=L3' } } });
+  const out = await startWebLogin({ baseUrl: BASE, numberMatch: true, fetchImpl });
+  assert.equal(out.matchNumber, undefined);
+  assert.equal(out.loginId, 'L3');
 });
 
 test('startWebLogin throws on a non-OK start', async () => {
@@ -86,7 +112,9 @@ test('pollUntilApproved rejects on expiry', async () => {
   );
 });
 
-test('pollUntilApproved rejects on denial', async () => {
+// voidbind-go never sends 'denied' (a refused approval leaves the login pending);
+// this pins the harmless fail-fast should an RP ever send one.
+test('pollUntilApproved rejects on a (non-voidbind-go) denied status', async () => {
   const fetchImpl = mockFetch({ 'GET /login/x': { body: { status: 'denied' } } });
   await assert.rejects(
     () => pollUntilApproved({ baseUrl: BASE, loginId: 'x', intervalMs: 1, fetchImpl }),
@@ -164,4 +192,30 @@ test('signIn ties start -> (render) -> poll into a single token result', async (
 
 test('POLL_INTERVAL_MS matches allthing signin.html (1s)', () => {
   assert.equal(POLL_INTERVAL_MS, 1000);
+});
+
+test('signIn numberMatch surfaces matchNumber on the awaiting-approval update', async () => {
+  const fetchImpl = mockFetch({
+    'POST /login': { body: { id: 'L4', qr: 'voidbind:login?rp=x&id=L4', match_number: 42 } },
+    'GET /login/L4': { body: { status: 'approved', token: 'T4', user: 'kate' } },
+  });
+  const updates = [];
+  const out = await signIn({ baseUrl: BASE, numberMatch: true, intervalMs: 1, fetchImpl, onStatus: (s) => updates.push(s) });
+  assert.deepEqual(out, { token: 'T4', user: 'kate' });
+  assert.equal(new URL(fetchImpl.calls[0].url).searchParams.get('mode'), 'number-match');
+  const awaiting = updates.find((s) => s.phase === 'awaiting-approval');
+  assert.equal(awaiting.matchNumber, 42);
+  assert.equal(awaiting.loginId, 'L4');
+});
+
+test('signIn without numberMatch sends no mode and no matchNumber', async () => {
+  const fetchImpl = mockFetch({
+    'POST /login': { body: { id: 'L5', qr: 'voidbind:login?rp=x&id=L5' } },
+    'GET /login/L5': { body: { status: 'approved', token: 'T5', user: 'kate' } },
+  });
+  const updates = [];
+  await signIn({ baseUrl: BASE, intervalMs: 1, fetchImpl, onStatus: (s) => updates.push(s) });
+  assert.equal(new URL(fetchImpl.calls[0].url).search, '');
+  const awaiting = updates.find((s) => s.phase === 'awaiting-approval');
+  assert.ok(!('matchNumber' in awaiting));
 });
