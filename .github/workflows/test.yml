@@ -25,10 +25,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
-      # No lockfile / dependencies today (the package is dependency-free and the
-      # QR encoder is vendored), so `npm ci` would fail for want of a lockfile.
-      # `npm install` is a no-op install that also succeeds once deps appear.
+      # The package is dependency-free (the QR encoder is vendored), but a
+      # committed package-lock.json pins that empty tree, so `npm ci` installs
+      # exactly the lockfile and fails if package.json and the lock drift.
       - name: install
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: test
         run: npm test
